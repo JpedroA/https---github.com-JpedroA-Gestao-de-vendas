@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ponto Certo Modas — Painel de Vendas, Curva ABC e Reposição</title>
+  <!-- Importa a folha de estilos separada -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- CABEÇALHO SUPERIOR -->
+  <header>
+    <div class="wrap">
+      <div>
+        <h1>Ponto Certo Modas — Gestão de Vendas, Curva ABC e Reposição</h1>
+        <p>Importe o CSV exportado do sistema (mensal ou acumulado) para limpar falhas e gerar a lista de compras.</p>
+      </div>
+      <div>
+        <!-- Botão para testar com dados embutidos sem precisar selecionar arquivo -->
+        <button class="secondary" id="btnSample">Carregar Exemplo (Set–Nov/2025)</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- BLOCO 1: ÁREA DE UPLOAD E CONTROLES DE REGRA DE NEGÓCIO -->
+    <div class="card">
+      <!-- Área de arrastar e soltar (drag & drop) ou clique -->
+      <div class="upload-zone" id="dropZone">
+        <strong>Arraste o arquivo CSV do sistema aqui ou clique para selecionar</strong>
+        <span>Aceita um ou vários arquivos .csv separados por ponto e vírgula (;) — corrige acentos e duplicidades automaticamente.</span>
+        <input type="file" id="fileInput" accept=".csv,text/csv" multiple style="display:none" />
+      </div>
+
+      <!-- Barra de parâmetros configuráveis pelo cliente -->
+      <div class="controls-bar">
+        <div class="control-group">
+          <!-- Regra acordada com o Sérgio: folga de 3 semanas por padrão para Curva A, editável -->
+          <label for="safetyWeeksA">Folga Curva A (campeões):</label>
+          <select id="safetyWeeksA">
+            <option value="2">2 semanas (sem folga extra)</option>
+            <option value="3" selected>3 semanas (2 sem. + 1 sem. folga — Recomendado)</option>
+            <option value="4">4 semanas (reforço máximo Natal)</option>
+          </select>
+
+          <!-- Filtro rápido por classe ABC -->
+          <label for="filterClass">Filtrar Curva:</label>
+          <select id="filterClass">
+            <option value="ALL">Todas (A, B e C)</option>
+            <option value="A">Apenas Curva A (~80% receita)</option>
+            <option value="B">Apenas Curva B (~15% receita)</option>
+            <option value="C">Apenas Curva C (~5% receita)</option>
+          </select>
+
+          <!-- Busca textual por código ou nome do produto -->
+          <input type="text" id="searchInput" placeholder="Buscar produto ou código..." />
+        </div>
+
+        <div class="control-group">
+          <!-- Gera um CSV pronto para enviar ao fornecedor -->
+          <button id="btnExportOrders" disabled>Exportar Lista de Compras (.CSV)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- BLOCO 2: BANNER DE AUDITORIA (MOSTRA O QUE FOI LIMPO AUTOMATICAMENTE) -->
+    <div id="auditBanner" class="audit-banner" style="display:none;">
+      <div>
+        <strong id="auditSummaryText"></strong>
+        <div id="auditDetails" class="audit-details"></div>
+      </div>
+      <button class="secondary" id="btnToggleAudit" style="padding:4px 10px; font-size:0.8rem;">Ver detalhes da limpeza</button>
+    </div>
+
+    <!-- BLOCO 3: PAINEL PRINCIPAL (EXIBIDO APÓS CARREGAR O CSV) -->
+    <div id="dashboardContent" style="display:none;">
+      
+      <!-- 4 Cartões de Resumo (KPIs) -->
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="label">Faturamento Líquido</div>
+          <div class="value" id="kpiRevenue">R$ 0,00</div>
+          <div class="sub" id="kpiReturns">Devoluções: R$ 0,00</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Peças Líquidas Vendidas</div>
+          <div class="value" id="kpiUnits">0</div>
+          <div class="sub" id="kpiPeriod">Período: 0 semanas</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Campeões de Receita (Curva A)</div>
+          <div class="value" id="kpiClassA">0 itens</div>
+          <div class="sub" id="kpiClassAShare">0% do faturamento</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Alerta de Reposição</div>
+          <div class="value" id="kpiReorderCount">0 itens</div>
+          <div class="sub" id="kpiReorderUnits">0 peças sugeridas para compra</div>
+        </div>
+      </div>
+
+      <!-- Abas de Navegação -->
+      <div class="card">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="tab-replenish">1. Reposição e Estoque (O que pedir)</button>
+          <button class="tab-btn" data-tab="tab-abc">2. Curva ABC (Quem traz o dinheiro)</button>
+          <button class="tab-btn" data-tab="tab-monthly">3. Vendas por Mês</button>
+        </div>
+
+        <!-- ABA 1: REPOSIÇÃO E ESTOQUE -->
+        <div id="tab-replenish" class="tab-panel">
+          <p class="tab-desc">
+            Regra: pede automaticamente quando o estoque atual cobre menos de <strong>2 semanas</strong> (Curvas B e C) ou menos da <strong>folga configurada</strong> (Curva A). Itens com mais de 12 semanas paradas aparecem sinalizados para queima.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Cód.</th>
+                  <th>Produto</th>
+                  <th>Curva</th>
+                  <th class="num">Venda/Sem.</th>
+                  <th class="num">Últ. Mês/Sem.</th>
+                  <th class="num">Estoque Est.</th>
+                  <th class="num">Cobertura</th>
+                  <th class="num">Alvo</th>
+                  <th class="num">Pedir (Un.)</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyReplenish"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ABA 2: CURVA ABC -->
+        <div id="tab-abc" class="tab-panel" style="display:none;">
+          <p class="tab-desc">
+            Classificação Pareto: <strong>Classe A</strong> (até ~80% do faturamento), <strong>Classe B</strong> (próximos ~15%) e <strong>Classe C</strong> (restante ~5%).
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Curva</th>
+                  <th>Cód.</th>
+                  <th>Produto</th>
+                  <th class="num">Peças Líq.</th>
+                  <th class="num">Faturamento</th>
+                  <th class="num">Part. (%)</th>
+                  <th>Acumulado (%)</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyAbc"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ABA 3: VENDAS POR MÊS -->
+        <div id="tab-monthly" class="tab-panel" style="display:none;">
+          <h3 class="section-title">Resumo Consolidado por Mês</h3>
+          <div class="table-wrap" style="margin-bottom:24px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mês</th>
+                  <th class="num">Transações</th>
+                  <th class="num">Peças Líquidas</th>
+                  <th class="num">Faturamento Bruto</th>
+                  <th class="num">Devoluções</th>
+                  <th class="num">Faturamento Líquido</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyMonthlySummary"></tbody>
+            </table>
+          </div>
+
+          <h3 class="section-title">Detalhamento por Produto e Mês</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr id="theadProductMonthly"></tr>
+              </thead>
+              <tbody id="tbodyProductMonthly"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ESTADO INICIAL (QUANDO NENHUM ARQUIVO FOI CARREGADO) -->
+    <div id="emptyState" class="card empty-state">
+      <strong>Nenhum arquivo carregado ainda.</strong>
+      <p>Arraste o CSV exportado do sistema acima ou clique em <em>"Carregar Exemplo (Set–Nov/2025)"</em> no topo para visualizar os dados da Ponto Certo Modas.</p>
+    </div>
+  </main>
+
+  <!-- RODAPÉ COM BOTÃO DE VERIFICAÇÃO AUTOMATIZADA -->
+  <footer>
+    <span>Processamento 100% local no navegador — nenhum dado da loja sai do seu computador.</span>
+    <button class="secondary" id="btnRunTests" style="padding:5px 10px; font-size:0.78rem;">Executar Testes de Auditoria</button>
+    <pre id="testOutput"></pre>
+  </footer>
+
+  <!-- Importa a lógica JavaScript no final do body para garantir que o DOM já existe -->
+  <script src="script.js"></script>
+</body>
+</html>
